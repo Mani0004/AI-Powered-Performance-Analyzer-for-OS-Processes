@@ -46,6 +46,8 @@ class SystemMonitor:
         self.last_alert = 0  # To prevent alert spam
         
         self.setup_ui()
+        self.root.attributes('-alpha', 0.0)
+        self.fade_in()
         self.update_stats()
     
     def setup_ui(self):
@@ -98,19 +100,22 @@ class SystemMonitor:
         control_frame = ttk.Frame(stats_frame)
         control_frame.grid(row=5, column=0, columnspan=2, sticky="ew", pady=5)
         
-        ttk.Button(control_frame, text="Increase Priority", command=self.increase_priority).grid(row=0, column=0, padx=2)
-        ttk.Button(control_frame, text="Decrease Priority", command=self.decrease_priority).grid(row=0, column=1, padx=2)
+        ttk.Button(control_frame, text="Increase Priority", command=lambda: self.modify_priority(increase=True)).grid(row=0, column=0, padx=2)
+        ttk.Button(control_frame, text="Decrease Priority", command=lambda: self.modify_priority(increase=False)).grid(row=0, column=1, padx=2)
         
         # Process List Frame
         process_frame = ttk.LabelFrame(top_right_frame, text="Top 5 Processes", padding=10)
         process_frame.pack(fill="both", expand=True, padx=5, pady=5)
         
         # Process Treeview
-        self.process_tree = ttk.Treeview(process_frame, columns=("Name", "PID", "CPU%", "Memory%"), show="headings")
+        self.process_tree = ttk.Treeview(process_frame, columns=("Name", "PID", "CPU%", "Memory%"), show="headings", style="Custom.Treeview")
         self.process_tree.heading("Name", text="Name")
         self.process_tree.heading("PID", text="PID")
         self.process_tree.heading("CPU%", text="CPU%")
         self.process_tree.heading("Memory%", text="Memory%")
+        style = ttk.Style()
+        
+        style.configure("Custom.Treeview", font=("Arial", 12))
         self.process_tree.pack(fill="both", expand=True)
         
         # Bottom Panel for Graphs
@@ -133,7 +138,22 @@ class SystemMonitor:
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
     
-    def increase_priority(self):
+    def modify_priority(self, increase):
+        selected = self.process_tree.selection()
+        if not selected:
+            messagebox.showwarning("Warning", "Please select a process first")
+            return
+
+        item = self.process_tree.item(selected[0])
+        pid = int(item['values'][1])
+        try:
+            p = psutil.Process(pid)
+            if increase and p.nice() > -20:  # Linux/Unix priority range
+                p.nice(p.nice() - 1)
+            elif not increase and p.nice() < 19:
+                p.nice(p.nice() + 1)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            messagebox.showerror("Error", "Cannot modify process priority")
         selected = self.process_tree.selection()
         if not selected:
             messagebox.showwarning("Warning", "Please select a process first")
@@ -143,8 +163,10 @@ class SystemMonitor:
         pid = int(item['values'][1])
         try:
             p = psutil.Process(pid)
-            if p.nice() > -20:  # Linux/Unix priority range
+            if increase and p.nice() > -20:  # Linux/Unix priority range
                 p.nice(p.nice() - 1)
+            elif not increase and p.nice() < 19:
+                p.nice(p.nice() + 1)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             messagebox.showerror("Error", "Cannot modify process priority")
     
@@ -175,6 +197,13 @@ class SystemMonitor:
             messagebox.showwarning("High Memory Usage", f"Memory usage is at {memory_percent}%!")
             self.last_alert = current_time
     
+    def fade_in(self):
+        alpha = self.root.attributes('-alpha')
+        if alpha < 1.0:
+            alpha += 0.05
+            self.root.attributes('-alpha', alpha)
+            self.root.after(50, self.fade_in)
+
     def update_stats(self):
         # Update CPU Usage
         cpu_percent = psutil.cpu_percent(interval=1)
@@ -199,20 +228,32 @@ class SystemMonitor:
         
         # Sort by CPU usage and get top 5
         processes.sort(key=lambda x: x['cpu_percent'], reverse=True)
-        top_processes = processes[:5]
+        top_processes = processes[:10]
         
-        # Clear existing items
-        for item in self.process_tree.get_children():
-            self.process_tree.delete(item)
+        # Update Process List
+        existing_pids = {self.process_tree.item(item)['values'][1]: item for item in self.process_tree.get_children()}
         
-        # Add new items
         for proc in top_processes:
-            self.process_tree.insert("", "end", values=(
-                proc['name'],
-                proc['pid'],
-                f"{proc['cpu_percent']:.1f}",
-                f"{proc['memory_percent']:.1f}"
-            ))
+            pid = proc['pid']
+            if pid in existing_pids:
+                self.process_tree.item(existing_pids[pid], values=(
+                    proc['name'],
+                    proc['pid'],
+                    f"{proc['cpu_percent']:.1f}",
+                    f"{proc['memory_percent']:.1f}"
+                ))
+            else:
+                self.process_tree.insert("", "end", values=(
+                    proc['name'],
+                    proc['pid'],
+                    f"{proc['cpu_percent']:.1f}",
+                    f"{proc['memory_percent']:.1f}"
+                ))
+        
+        # Remove processes no longer in the top list
+        for pid, item in existing_pids.items():
+            if pid not in [proc['pid'] for proc in top_processes]:
+                self.process_tree.delete(item)
         
         # Update Network Usage
         net_io = psutil.net_io_counters()
@@ -246,33 +287,34 @@ class SystemMonitor:
         self.ax2.clear()
         
         # Plot CPU usage
-        self.ax1.plot(list(self.time_data), list(self.cpu_data), 'b-', label='CPU Usage')
-        self.ax1.set_title('CPU Usage Over Time')
+        self.ax1.plot(list(range(len(self.cpu_data))), list(self.cpu_data), 'b-', label='CPU Usage', alpha=0.8, linewidth=2)
+        self.ax1.set_title('CPU Usage Over Time', fontdict={'fontsize': 14, 'fontweight': 'bold', 'color': 'blue'})
         self.ax1.set_ylim(0, 100)
-        self.ax1.grid(True)
-        self.ax1.tick_params(axis='x', rotation=45)
+        self.ax1.grid(True, linestyle='--', alpha=0.7)
+        self.ax1.tick_params(axis='x', labelbottom=False)
         
         # Plot Memory usage
-        self.ax2.plot(list(self.time_data), list(self.memory_data), 'r-', label='Memory Usage')
-        self.ax2.set_title('Memory Usage Over Time')
+        self.ax2.plot(list(range(len(self.memory_data))), list(self.memory_data), 'r-', label='Memory Usage', alpha=0.8, linewidth=2)
+        self.ax2.set_title('Memory Usage Over Time', fontdict={'fontsize': 14, 'fontweight': 'bold', 'color': 'red'})
         self.ax2.set_ylim(0, 100)
-        self.ax2.grid(True)
-        self.ax2.tick_params(axis='x', rotation=45)
+        self.ax2.grid(True, linestyle='--', alpha=0.7)
+        self.ax2.tick_params(axis='x', labelbottom=False)
         
         # Plot Network usage with simplified legend
-        self.ax3.plot(list(self.time_data), list(self.network_sent_data), 'g-', label='Upload')
-        self.ax3.plot(list(self.time_data), list(self.network_recv_data), 'y-', label='Download')
-        self.ax3.set_title('Network Usage Over Time (MB/s)')
-        self.ax3.grid(True)
-        self.ax3.tick_params(axis='x', rotation=45)
-        self.ax3.legend(loc='upper right')
+        self.ax3.plot(list(self.time_data), list(self.network_sent_data), 'g-', label='Upload', alpha=0.8, linewidth=2)
+        self.ax3.plot(list(self.time_data), list(self.network_recv_data), 'y-', label='Download', alpha=0.8, linewidth=2)
+        self.ax3.set_title('Network Usage Over Time (MB/s)', fontdict={'fontsize': 14, 'fontweight': 'bold', 'color': 'green'})
+        self.ax3.grid(True, linestyle='--', alpha=0.7)
+        self.ax3.tick_params(axis='x', rotation=45, labelsize=10)
+        self.ax3.legend(loc='upper right', labels=['Upload', 'Download'])
         
         # Adjust layout and draw
         self.fig.tight_layout()
         self.canvas.draw()
         
+        
         # Schedule next update
-        self.root.after(2000, self.update_stats)
+        self.root.after(1000, self.update_stats)
     
     def run(self):
         self.root.mainloop()
