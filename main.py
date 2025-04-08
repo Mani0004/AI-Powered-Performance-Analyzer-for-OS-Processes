@@ -1,44 +1,109 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 import psutil
-import os
-from dotenv import load_dotenv
-import openai
 from datetime import datetime
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
+from collections import deque
+import numpy as np
+import threading
+import time
 
 class SystemMonitor:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("AI-Powered OS Performance Analyzer")
-        self.root.geometry("800x600")
+        self.root.title("OS Performance Analyzer")
+        self.root.geometry("1200x800")
+        self.root.configure(bg="#f0f0f0")
         
-        # Load OpenAI API key from .env file
-        load_dotenv()
-        openai.api_key = os.getenv('OPENAI_API_KEY')
+        # Configure styles for light theme
+        style = ttk.Style()
+        style.configure("TFrame", background="#ffffff")
+        style.configure("TLabelframe", background="#ffffff", foreground="#000000")
+        style.configure("TLabelframe.Label", background="#ffffff", foreground="#000000")
+        style.configure("TLabel", background="#ffffff", foreground="#000000")
+        style.configure("Treeview", background="#ffffff", foreground="#000000", fieldbackground="#ffffff")
+        style.configure("Treeview.Heading", background="#e1e1e1", foreground="#000000")
+        style.configure("TButton", background="#007acc", foreground="#ffffff", padding=(10, 5))
+        style.map("TButton",
+            background=[("active", "#0066cc"), ("pressed", "#005fb8")],
+            foreground=[("active", "#ffffff"), ("pressed", "#ffffff")])
+        
+        # Configure Treeview selection colors
+        style.map("Treeview",
+            background=[("selected", "#007acc")],
+            foreground=[("selected", "#ffffff")])
+        
+        # Initialize data for graphs
+        self.cpu_data = deque(maxlen=30)
+        self.memory_data = deque(maxlen=30)
+        self.time_data = deque(maxlen=30)
+        self.network_sent_data = deque(maxlen=30)
+        self.network_recv_data = deque(maxlen=30)
+        self.prev_net_io = psutil.net_io_counters()
+        self.alert_threshold = 90  # Alert threshold for resource usage
+        self.last_alert = 0  # To prevent alert spam
         
         self.setup_ui()
         self.update_stats()
     
     def setup_ui(self):
-        # System Stats Frame
-        stats_frame = ttk.LabelFrame(self.root, text="System Statistics", padding=10)
-        stats_frame.pack(fill="x", padx=10, pady=5)
+        # Main Panel for all content
+        main_panel = ttk.Frame(self.root)
+        main_panel.pack(fill="both", expand=True, padx=10, pady=10)
         
+        # Top Panel for Stats and Processes
+        top_panel = ttk.Frame(main_panel)
+        top_panel.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        # Create a frame for system stats and process list side by side
+        top_left_frame = ttk.Frame(top_panel)
+        top_left_frame.pack(side="left", fill="both", expand=True, padx=5, pady=5)
+        
+        top_right_frame = ttk.Frame(top_panel)
+        top_right_frame.pack(side="right", fill="both", expand=True, padx=5, pady=5)
+        
+        # System Stats Frame
+        stats_frame = ttk.LabelFrame(top_left_frame, text="System Statistics", padding=10)
+        stats_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        # Create a grid layout for system stats
         # CPU Usage
-        self.cpu_label = ttk.Label(stats_frame, text="CPU Usage: ")
-        self.cpu_label.pack()
+        ttk.Label(stats_frame, text="CPU Usage:", font=("Arial", 10, "bold")).grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        self.cpu_label = ttk.Label(stats_frame, text="0%")
+        self.cpu_label.grid(row=0, column=1, sticky="w", padx=5, pady=5)
         
         # Memory Usage
-        self.memory_label = ttk.Label(stats_frame, text="Memory Usage: ")
-        self.memory_label.pack()
+        ttk.Label(stats_frame, text="Memory Usage:", font=("Arial", 10, "bold")).grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        self.memory_label = ttk.Label(stats_frame, text="0%")
+        self.memory_label.grid(row=1, column=1, sticky="w", padx=5, pady=5)
         
         # Disk Usage
-        self.disk_label = ttk.Label(stats_frame, text="Disk Usage: ")
-        self.disk_label.pack()
+        ttk.Label(stats_frame, text="Disk Usage:", font=("Arial", 10, "bold")).grid(row=2, column=0, sticky="w", padx=5, pady=5)
+        self.disk_label = ttk.Label(stats_frame, text="0%")
+        self.disk_label.grid(row=2, column=1, sticky="w", padx=5, pady=5)
+        
+        # Network Usage
+        ttk.Label(stats_frame, text="Network Usage:", font=("Arial", 10, "bold")).grid(row=3, column=0, sticky="w", padx=5, pady=5)
+        self.network_label = ttk.Label(stats_frame, text="↑0 MB/s ↓0 MB/s")
+        self.network_label.grid(row=3, column=1, sticky="w", padx=5, pady=5)
+        
+        # Temperature
+        ttk.Label(stats_frame, text="CPU Temperature:", font=("Arial", 10, "bold")).grid(row=4, column=0, sticky="w", padx=5, pady=5)
+        self.temp_label = ttk.Label(stats_frame, text="N/A")
+        self.temp_label.grid(row=4, column=1, sticky="w", padx=5, pady=5)
+        
+        # Process Control Buttons
+        control_frame = ttk.Frame(stats_frame)
+        control_frame.grid(row=5, column=0, columnspan=2, sticky="ew", pady=5)
+        
+        ttk.Button(control_frame, text="Increase Priority", command=self.increase_priority).grid(row=0, column=0, padx=2)
+        ttk.Button(control_frame, text="Decrease Priority", command=self.decrease_priority).grid(row=0, column=1, padx=2)
         
         # Process List Frame
-        process_frame = ttk.LabelFrame(self.root, text="Top 5 Processes", padding=10)
-        process_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        process_frame = ttk.LabelFrame(top_right_frame, text="Top 5 Processes", padding=10)
+        process_frame.pack(fill="both", expand=True, padx=5, pady=5)
         
         # Process Treeview
         self.process_tree = ttk.Treeview(process_frame, columns=("Name", "PID", "CPU%", "Memory%"), show="headings")
@@ -48,17 +113,67 @@ class SystemMonitor:
         self.process_tree.heading("Memory%", text="Memory%")
         self.process_tree.pack(fill="both", expand=True)
         
-        # AI Suggestions Frame
-        ai_frame = ttk.LabelFrame(self.root, text="AI Suggestions", padding=10)
-        ai_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        # Bottom Panel for Graphs
+        bottom_panel = ttk.Frame(main_panel)
+        bottom_panel.pack(fill="both", expand=True, padx=5, pady=5)
         
-        # AI Suggestions Text
-        self.suggestions_text = tk.Text(ai_frame, height=6, wrap=tk.WORD)
-        self.suggestions_text.pack(fill="both", expand=True)
+        # Graphs Frame
+        graphs_frame = ttk.LabelFrame(bottom_panel, text="Performance Graphs", padding=10)
+        graphs_frame.pack(fill="both", expand=True, padx=5, pady=5)
         
-        # Get AI Suggestions Button
-        self.suggest_button = ttk.Button(ai_frame, text="Get AI Suggestions", command=self.get_ai_suggestions)
-        self.suggest_button.pack(pady=5)
+        # Create matplotlib figure for all metrics with adjusted size
+        self.fig = Figure(figsize=(12, 4), dpi=100)
+        gs = self.fig.add_gridspec(3, 1, hspace=0.4)
+        self.ax1 = self.fig.add_subplot(gs[0])
+        self.ax2 = self.fig.add_subplot(gs[1])
+        self.ax3 = self.fig.add_subplot(gs[2])
+        
+        # Create canvas
+        self.canvas = FigureCanvasTkAgg(self.fig, master=graphs_frame)
+        self.canvas.draw()
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+    
+    def increase_priority(self):
+        selected = self.process_tree.selection()
+        if not selected:
+            messagebox.showwarning("Warning", "Please select a process first")
+            return
+        
+        item = self.process_tree.item(selected[0])
+        pid = int(item['values'][1])
+        try:
+            p = psutil.Process(pid)
+            if p.nice() > -20:  # Linux/Unix priority range
+                p.nice(p.nice() - 1)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            messagebox.showerror("Error", "Cannot modify process priority")
+    
+    def decrease_priority(self):
+        selected = self.process_tree.selection()
+        if not selected:
+            messagebox.showwarning("Warning", "Please select a process first")
+            return
+        
+        item = self.process_tree.item(selected[0])
+        pid = int(item['values'][1])
+        try:
+            p = psutil.Process(pid)
+            if p.nice() < 19:  # Linux/Unix priority range
+                p.nice(p.nice() + 1)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            messagebox.showerror("Error", "Cannot modify process priority")
+    
+    def check_alerts(self, cpu_percent, memory_percent):
+        current_time = time.time()
+        if current_time - self.last_alert < 60:  # Only alert once per minute
+            return
+        
+        if cpu_percent > self.alert_threshold:
+            messagebox.showwarning("High CPU Usage", f"CPU usage is at {cpu_percent}%!")
+            self.last_alert = current_time
+        elif memory_percent > self.alert_threshold:
+            messagebox.showwarning("High Memory Usage", f"Memory usage is at {memory_percent}%!")
+            self.last_alert = current_time
     
     def update_stats(self):
         # Update CPU Usage
@@ -99,47 +214,65 @@ class SystemMonitor:
                 f"{proc['memory_percent']:.1f}"
             ))
         
-        # Schedule next update and get AI suggestions
-        self.get_ai_suggestions()
-        self.root.after(2000, self.update_stats)
-    
-    def get_ai_suggestions(self, show_error=True):
+        # Update Network Usage
+        net_io = psutil.net_io_counters()
+        sent = (net_io.bytes_sent - self.prev_net_io.bytes_sent) / 1024 / 1024  # MB/s
+        recv = (net_io.bytes_recv - self.prev_net_io.bytes_recv) / 1024 / 1024  # MB/s
+        self.prev_net_io = net_io
+        self.network_label.config(text=f"Network: ↑{sent:.1f} MB/s ↓{recv:.1f} MB/s")
+        
+        # Update Temperature (if available)
         try:
-            # Collect current system stats
-            cpu_percent = psutil.cpu_percent()
-            memory = psutil.virtual_memory()
-            disk = psutil.disk_usage('/')
-            
-            # Prepare system status message
-            status_msg = f"System Status:\n"
-            status_msg += f"CPU Usage: {cpu_percent}%\n"
-            status_msg += f"Memory Usage: {memory.percent}%\n"
-            status_msg += f"Disk Usage: {disk.percent}%\n\n"
-            status_msg += "Top Processes:\n"
-            
-            for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent'])[:5]:
-                try:
-                    pinfo = proc.info
-                    status_msg += f"{pinfo['name']}: CPU {pinfo['cpu_percent']:.1f}%, Memory {pinfo['memory_percent']:.1f}%\n"
-                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                    pass
-            
-            # Get AI suggestions
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You are a system performance analyst. Provide concise, practical suggestions for optimizing system performance based on the current status."},
-                    {"role": "user", "content": f"Given this system status, suggest performance optimization steps:\n{status_msg}"}
-                ]
-            )
-            
-            # Display suggestions
-            suggestions = response['choices'][0]['message']['content']
-            self.suggestions_text.delete(1.0, tk.END)
-            self.suggestions_text.insert(tk.END, suggestions)
-            
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to get AI suggestions: {str(e)}")
+            temps = psutil.sensors_temperatures()
+            if temps and 'coretemp' in temps:
+                temp = temps['coretemp'][0].current
+                self.temp_label.config(text=f"CPU Temperature: {temp}°C")
+        except (AttributeError, KeyError):
+            self.temp_label.config(text="CPU Temperature: N/A")
+        
+        # Check for alerts
+        self.check_alerts(cpu_percent, memory.percent)
+        
+        # Update graphs
+        current_time = datetime.now().strftime('%H:%M:%S')
+        self.cpu_data.append(cpu_percent)
+        self.memory_data.append(memory.percent)
+        self.time_data.append(current_time)
+        self.network_sent_data.append(sent)
+        self.network_recv_data.append(recv)
+        
+        # Clear previous plots
+        self.ax1.clear()
+        self.ax2.clear()
+        
+        # Plot CPU usage
+        self.ax1.plot(list(self.time_data), list(self.cpu_data), 'b-', label='CPU Usage')
+        self.ax1.set_title('CPU Usage Over Time')
+        self.ax1.set_ylim(0, 100)
+        self.ax1.grid(True)
+        self.ax1.tick_params(axis='x', rotation=45)
+        
+        # Plot Memory usage
+        self.ax2.plot(list(self.time_data), list(self.memory_data), 'r-', label='Memory Usage')
+        self.ax2.set_title('Memory Usage Over Time')
+        self.ax2.set_ylim(0, 100)
+        self.ax2.grid(True)
+        self.ax2.tick_params(axis='x', rotation=45)
+        
+        # Plot Network usage with simplified legend
+        self.ax3.plot(list(self.time_data), list(self.network_sent_data), 'g-', label='Upload')
+        self.ax3.plot(list(self.time_data), list(self.network_recv_data), 'y-', label='Download')
+        self.ax3.set_title('Network Usage Over Time (MB/s)')
+        self.ax3.grid(True)
+        self.ax3.tick_params(axis='x', rotation=45)
+        self.ax3.legend(loc='upper right')
+        
+        # Adjust layout and draw
+        self.fig.tight_layout()
+        self.canvas.draw()
+        
+        # Schedule next update
+        self.root.after(2000, self.update_stats)
     
     def run(self):
         self.root.mainloop()
